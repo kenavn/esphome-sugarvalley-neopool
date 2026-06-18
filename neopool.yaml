@@ -1,0 +1,567 @@
+# =============================================================================
+#  esphome-sugarvalley-neopool — reusable ESPHome package
+#  Sugar Valley NeoPool / Oxilife / Hidrolife / Aquascenic / Bionet / Bayrol ...
+#  salt chlorinators, over RS-485 Modbus (19200 8N1, slave addr 0x01).
+#
+#  This is a YAML *package* (not a compiled component) — the device speaks plain
+#  Modbus, which ESPHome's built-in modbus_controller already handles.
+#
+#  Register map verified against Tasmota xsns_83_neopool.ino and the official
+#  Sugar Valley "MODBUS Register description" (Welldana D30-190045). All read
+#  scalings cross-checked against a known-good real-unit config.
+#
+#  USAGE (in your board config):
+#    # 1. provide the RS-485 UART + modbus hub yourself (board-specific pins):
+#    uart:
+#      - id: uart_rs485
+#        tx_pin: GPIOxx
+#        rx_pin: GPIOxx
+#        baud_rate: 19200
+#    modbus:
+#      id: modbus_bus
+#      uart_id: uart_rs485
+#      flow_control_pin: GPIOxx   # SP3485 DE/~RE, omit if direct TTL
+#    # 2. pull in this package and point it at your modbus hub:
+#    packages:
+#      neopool: github://kenavn/esphome-sugarvalley-neopool/neopool.yaml@main
+#    substitutions:
+#      neopool_modbus_id: modbus_bus
+# =============================================================================
+
+substitutions:
+  # --- override these from the including config as needed ---
+  neopool_id: oxilife              # id of the modbus_controller created here
+  neopool_modbus_id: modbus_bus    # id of YOUR modbus: hub
+  neopool_address: "0x01"          # NeoPool Modbus slave address
+  neopool_name: "Pool"             # entity name prefix
+  neopool_update_interval: "10s"   # base poll cadence
+  # Which relay of MBF_RELAY_STATE (0x010E) the demo write toggles, as a bitmask.
+  # NeoPool relay bits (typical factory assignment): 0x0001 = pH acid pump,
+  # 0x0002 = filtration, 0x0004 = lighting, 0x0008+ = aux. Default = lighting (safe).
+  # !! Do NOT set 0x0001 — that is the acid dosing pump. !!
+  neopool_aux_relay_bitmask: "0x0004"
+
+modbus_controller:
+  - id: ${neopool_id}
+    address: ${neopool_address}
+    modbus_id: ${neopool_modbus_id}
+    command_throttle: 0ms
+    update_interval: ${neopool_update_interval}
+    setup_priority: -10
+
+# -----------------------------------------------------------------------------
+#  READS — measurements (register_type: read / FC4, as verified on real units)
+# -----------------------------------------------------------------------------
+sensor:
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_ph
+    name: "${neopool_name} pH"
+    address: 0x0102            # MBF_MEASURE_PH
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 2
+    unit_of_measurement: "pH"
+    state_class: measurement
+    filters: [multiply: 0.01]
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_redox
+    name: "${neopool_name} Redox"
+    address: 0x0103            # MBF_MEASURE_RX
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "mV"
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_chlorine
+    name: "${neopool_name} Chlorine"
+    address: 0x0104            # MBF_MEASURE_CL (1/100 ppm)
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 2
+    unit_of_measurement: "ppm"
+    state_class: measurement
+    filters: [multiply: 0.01]
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_conductivity
+    name: "${neopool_name} Conductivity"
+    address: 0x0105            # MBF_MEASURE_CONDUCTIVITY (%)
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "%"
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_temperature
+    name: "${neopool_name} Water Temperature"
+    address: 0x0106            # MBF_MEASURE_TEMPERATURE (1/10 C)
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 1
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    skip_updates: 6
+    filters: [multiply: 0.1]
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_ion_current
+    name: "${neopool_name} Ionization Level"
+    address: 0x0100            # MBF_ION_CURRENT
+    register_type: read
+    value_type: U_WORD
+    state_class: measurement
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_hidro_current
+    name: "${neopool_name} Electrolysis Production"
+    address: 0x0101            # MBF_HIDRO_CURRENT (g/h on g/h-mode units, /10)
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "g/h"
+    state_class: measurement
+    filters: [multiply: 0.1]
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_hidro_voltage
+    name: "${neopool_name} Cell Voltage"
+    address: 0x0111            # MBF_HIDRO_VOLTAGE (tenths of a volt)
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 1
+    unit_of_measurement: "V"
+    state_class: measurement
+    skip_updates: 6
+    filters: [multiply: 0.1]    # verify scale on your unit
+
+  # --- setpoint read-backs (PAR registers, still read via FC4 as verified) ---
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_ph_setpoint_high
+    name: "${neopool_name} pH Setpoint High"
+    address: 0x0504            # MBF_PAR_PH1
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 2
+    unit_of_measurement: "pH"
+    entity_category: diagnostic
+    skip_updates: 30
+    filters: [multiply: 0.01]
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_ph_setpoint_low
+    name: "${neopool_name} pH Setpoint Low"
+    address: 0x0505            # MBF_PAR_PH2
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 2
+    unit_of_measurement: "pH"
+    entity_category: diagnostic
+    skip_updates: 30
+    filters: [multiply: 0.01]
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_redox_setpoint
+    name: "${neopool_name} Redox Setpoint"
+    address: 0x0508            # MBF_PAR_RX1
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "mV"
+    entity_category: diagnostic
+    skip_updates: 30
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_chlorine_setpoint
+    name: "${neopool_name} Chlorine Setpoint"
+    address: 0x050A            # MBF_PAR_CL1 (1/100 ppm)
+    register_type: read
+    value_type: U_WORD
+    accuracy_decimals: 2
+    unit_of_measurement: "ppm"
+    entity_category: diagnostic
+    skip_updates: 30
+    filters: [multiply: 0.01]
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_hidro_setpoint
+    name: "${neopool_name} Electrolysis Setpoint"
+    address: 0x0502            # MBF_PAR_HIDRO (g/h on g/h-mode units, /10)
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "g/h"
+    entity_category: diagnostic
+    skip_updates: 30
+    filters: [multiply: 0.1]
+
+  # raw filtration-mode code; decoded to text below
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_filt_mode
+    address: 0x0411            # MBF_PAR_FILT_MODE
+    register_type: read
+    value_type: U_WORD
+    internal: true
+    skip_updates: 6
+
+  # raw relay-state bitfield; used by the relay switch's RMW + flow diagnostics
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_relay_state_raw
+    address: 0x010E            # MBF_RELAY_STATE
+    register_type: read
+    value_type: U_WORD
+    internal: true
+
+# -----------------------------------------------------------------------------
+#  READS — status bitfields decoded into binary sensors
+#  MBF_HIDRO_STATUS (0x010D) + MBF_PH_STATUS (0x0107)
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Cell Flow (FL1)"
+    address: 0x010D
+    register_type: read
+    bitmask: 0x0008           # MBMSK_HIDRO_STATUS_FL1
+    device_class: moving
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Electrolysis On Target"
+    address: 0x010D
+    register_type: read
+    bitmask: 0x0001           # MBMSK_HIDRO_STATUS_ON_TARGET
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Electrolysis Low (cannot reach setpoint)"
+    address: 0x010D
+    register_type: read
+    bitmask: 0x0002           # MBMSK_HIDRO_STATUS_LOW
+    device_class: problem
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Cover Closed"
+    address: 0x010D
+    register_type: read
+    bitmask: 0x0010           # MBMSK_HIDRO_STATUS_COVER
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Module Active"
+    address: 0x010D
+    register_type: read
+    bitmask: 0x0020           # MBMSK_HIDRO_STATUS_MODULE_ACTIVE
+    entity_category: diagnostic
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Redox Control Enabled"
+    address: 0x010D
+    register_type: read
+    bitmask: 0x0080           # MBMSK_HIDRO_STATUS_REDOX_ENABLED
+    entity_category: diagnostic
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Shock Mode"
+    address: 0x010D
+    register_type: read
+    bitmask: 0x0100           # MBMSK_HIDRO_STATUS_SHOCK_ENABLED
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Acid Pump Active"
+    address: 0x0107
+    register_type: read
+    bitmask: 0x0800           # MBMSK_PH_STATUS_ACID_PUMP_ACTIVE
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} pH Alarm"
+    address: 0x0107
+    register_type: read
+    bitmask: 0x000F           # MBMSK_PH_STATUS_ALARM (non-zero = alarm)
+    device_class: problem
+
+# -----------------------------------------------------------------------------
+#  Decoded filtration mode -> text
+# -----------------------------------------------------------------------------
+text_sensor:
+  - platform: template
+    name: "${neopool_name} Filtration Mode"
+    id: np_filt_mode_text
+    lambda: |-
+      switch ((int) id(np_filt_mode).state) {
+        case 0:  return {"Manual"};
+        case 1:  return {"Auto"};
+        case 2:  return {"Heating"};
+        case 3:  return {"Smart"};
+        case 4:  return {"Intelligent"};
+        case 13: return {"Backwash"};
+        default: return {"Unknown"};
+      }
+    update_interval: ${neopool_update_interval}
+
+# -----------------------------------------------------------------------------
+#  WRITE — single relay, proof-of-concept for the NeoPool commit path.
+#
+#  EXPERIMENTAL — UNVERIFIED ON HARDWARE. NeoPool relay control is a sequence:
+#    1) MBF_SET_MANUAL_CTRL (0x0289) = 1   (enable manual relay control)
+#    2) MBF_RELAY_STATE     (0x010E)  set/clear the target bit (read-modify-write)
+#    3) MBF_SET_MANUAL_CTRL (0x0289) = 0   (release manual control)
+#    4) MBF_EXEC            (0x02F5) = 1   (apply the change to RAM)
+#  Writing MBF_SAVE_TO_EEPROM (0x02F0) is intentionally NOT done here (live
+#  changes only — avoids EEPROM wear). Verify the bit/sequence on your unit.
+# -----------------------------------------------------------------------------
+switch:
+  # internal write helpers (each toggle issues one Modbus write)
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_manual_ctrl
+    register_type: holding
+    address: 0x0289           # MBF_SET_MANUAL_CTRL
+    bitmask: 0x0001
+    use_write_multiple: true
+    internal: true
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_exec
+    register_type: holding
+    address: 0x02F5           # MBF_EXEC (apply staged write to RAM, live)
+    bitmask: 0x0001
+    use_write_multiple: true  # device only accepts FC16 writes — mandatory
+    internal: true
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_save               # MBF_SAVE_TO_EEPROM — persist. ~1s unresponsive.
+    register_type: holding
+    address: 0x02F0
+    bitmask: 0x0001
+    use_write_multiple: true
+    internal: true
+
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_relay_bit
+    register_type: holding
+    address: 0x010E           # MBF_RELAY_STATE (RMW of one bit)
+    bitmask: ${neopool_aux_relay_bitmask}
+    use_write_multiple: true
+    internal: true
+
+  # user-facing relay -> routes through the single serialized writer (np_write)
+  - platform: template
+    name: "${neopool_name} Aux Relay"
+    id: np_aux_relay
+    icon: mdi:electric-switch
+    optimistic: true
+    turn_on_action:
+      - script.execute:
+          id: np_write
+          op: 1                                     # OP_RELAY_ON
+    turn_off_action:
+      - script.execute:
+          id: np_write
+          op: 0                                     # OP_RELAY_OFF
+
+script:
+  # ===========================================================================
+  #  np_write — THE single serialized Modbus writer for this device.
+  #
+  #  mode: queued => one invocation runs to completion before the next starts,
+  #  so NO two write sequences can ever interleave on the bus. EVERY user-facing
+  #  write control (the relay above; the setpoints/select in the opt-in block
+  #  below) funnels through this one script and never writes directly. This is
+  #  what closes the relay manual-control bracket against interleaved writes.
+  #
+  #  op codes:
+  #    0 = relay OFF   1 = relay ON   (MBF_SET_MANUAL_CTRL bracket, then EXEC)
+  #    2 = commit      (EXEC only      — live, lost on controller power cycle)
+  #    3 = commit+save (EXEC + SAVE    — persists; ~1s unresponsive afterwards)
+  #
+  #  Setpoint/select platforms write their own value register first, then call
+  #  np_write with op 2/3 to commit. Those value writes target a different
+  #  register and never trigger EXEC, so they can't corrupt the relay bracket.
+  # ===========================================================================
+  - id: np_write
+    mode: queued
+    parameters:
+      op: int
+    then:
+      # --- relay ops (0/1): manual-control bracket ---
+      - if:
+          condition:
+            lambda: "return op <= 1;"
+          then:
+            - lambda: "id(np_manual_ctrl).turn_on();"     # 0x0289 = 1
+            - delay: 60ms
+            - if:
+                condition:
+                  lambda: "return op == 1;"
+                then:
+                  - lambda: "id(np_relay_bit).turn_on();"  # set relay bit
+                else:
+                  - lambda: "id(np_relay_bit).turn_off();" # clear relay bit
+            - delay: 60ms
+            - lambda: "id(np_manual_ctrl).turn_off();"    # 0x0289 = 0
+            - delay: 60ms
+      # --- EXEC: applies staged data (relay ops AND commit ops 2/3) ---
+      - lambda: "id(np_exec).turn_off();"               # ensure a state edge
+      - delay: 30ms
+      - lambda: "id(np_exec).turn_on();"                # MBF_EXEC = 1 -> apply
+      # --- SAVE: persist to EEPROM (op 3 only) ---
+      - if:
+          condition:
+            lambda: "return op == 3;"
+          then:
+            - delay: 60ms
+            - lambda: "id(np_save).turn_off();"
+            - delay: 30ms
+            - lambda: "id(np_save).turn_on();"          # MBF_SAVE_TO_EEPROM = 1
+            - delay: 1100ms                             # controller unresponsive <1s
+
+# =============================================================================
+#  WRITE ENDPOINTS — setpoints + filtration mode  (OPT-IN / COMMENTED OUT)
+#
+#  Validated and ready, but commented so nothing can write to a live pool until
+#  you opt in. Every write here funnels through the single queued `np_write`
+#  script (see above) via on_value, so no two write sequences ever interleave.
+#
+#  COMMIT CHOICE (the `op:` passed to np_write):
+#    op: 3  -> EXEC + SAVE_TO_EEPROM: persists across controller reboots, as the
+#             Tasmota driver does for setpoints. Costs a ~1s unresponsive window
+#             (one-off sensor timeout). Used for the setpoints below.
+#    op: 2  -> EXEC only: applies live, forgotten on the controller's next power
+#             cycle. Used for the filtration-mode select (transient).
+#
+#  CONCURRENCY: ESPHome serializes the bus (one request/response at a time) and,
+#  because every write goes through np_write (queued), bracketed sequences can't
+#  overlap. A periodic read may still land between a value write and its EXEC —
+#  benign, since the controller holds the staged value until EXEC.
+#
+#  TO ENABLE:
+#   1. Uncomment the `number:` and `select:` block below.
+#   2. Comment out the matching read-back SENSORS above — np_ph_setpoint_high,
+#      np_ph_setpoint_low, np_redox_setpoint, np_chlorine_setpoint,
+#      np_hidro_setpoint — each number here both READS and WRITES its register,
+#      so the diagnostic sensor becomes redundant (and would duplicate names).
+#   3. Confirm the min/max clamps suit your pool. Never exceed MBF_PAR_HIDRO_NOM
+#      for the electrolysis setpoint.
+# =============================================================================
+# number:
+#   - platform: modbus_controller
+#     modbus_controller_id: ${neopool_id}
+#     name: "${neopool_name} pH Setpoint High"
+#     address: 0x0504            # MBF_PAR_PH1 (must stay > PH2)
+#     register_type: holding
+#     value_type: U_WORD
+#     use_write_multiple: true
+#     multiply: 100              # 7.40 -> 740
+#     min_value: 6.5
+#     max_value: 8.0
+#     step: 0.05
+#     mode: box
+#     on_value:
+#       - script.execute:
+#           id: np_write
+#           op: 3                  # EXEC + SAVE (persist setpoint)
+#
+#   - platform: modbus_controller
+#     modbus_controller_id: ${neopool_id}
+#     name: "${neopool_name} pH Setpoint Low"
+#     address: 0x0505            # MBF_PAR_PH2 (must stay < PH1)
+#     register_type: holding
+#     value_type: U_WORD
+#     use_write_multiple: true
+#     multiply: 100
+#     min_value: 6.5
+#     max_value: 8.0
+#     step: 0.05
+#     mode: box
+#     on_value:
+#       - script.execute:
+#           id: np_write
+#           op: 3                  # EXEC + SAVE (persist setpoint)
+#
+#   - platform: modbus_controller
+#     modbus_controller_id: ${neopool_id}
+#     name: "${neopool_name} Redox Setpoint"
+#     address: 0x0508            # MBF_PAR_RX1 (range 0..1000 mV)
+#     register_type: holding
+#     value_type: U_WORD
+#     use_write_multiple: true
+#     min_value: 0
+#     max_value: 1000
+#     step: 5
+#     on_value:
+#       - script.execute:
+#           id: np_write
+#           op: 3                  # EXEC + SAVE (persist setpoint)
+#
+#   - platform: modbus_controller
+#     modbus_controller_id: ${neopool_id}
+#     name: "${neopool_name} Chlorine Setpoint"
+#     address: 0x050A            # MBF_PAR_CL1 (range 0..1000 -> 0..10 ppm)
+#     register_type: holding
+#     value_type: U_WORD
+#     use_write_multiple: true
+#     multiply: 100              # 1.50 ppm -> 150
+#     min_value: 0
+#     max_value: 10
+#     step: 0.1
+#     on_value:
+#       - script.execute:
+#           id: np_write
+#           op: 3                  # EXEC + SAVE (persist setpoint)
+#
+#   - platform: modbus_controller
+#     modbus_controller_id: ${neopool_id}
+#     name: "${neopool_name} Electrolysis Setpoint"
+#     address: 0x0502            # MBF_PAR_HIDRO (g/h mode here, /10)
+#     register_type: holding
+#     value_type: U_WORD
+#     use_write_multiple: true
+#     multiply: 10               # 12.0 g/h -> 120
+#     min_value: 0
+#     max_value: 100             # !! clamp to your MBF_PAR_HIDRO_NOM (0x0306) !!
+#     step: 1
+#     on_value:
+#       - script.execute:
+#           id: np_write
+#           op: 3                  # EXEC + SAVE (persist setpoint)
+#
+# select:
+#   - platform: modbus_controller
+#     modbus_controller_id: ${neopool_id}
+#     name: "${neopool_name} Filtration Mode"
+#     address: 0x0411            # MBF_PAR_FILT_MODE (no register_type on select)
+#     use_write_multiple: true
+#     optionsmap:
+#       "Manual": 0              # MBV_PAR_FILT_*
+#       "Auto": 1
+#       "Heating": 2
+#       "Smart": 3
+#       "Intelligent": 4
+#       "Backwash": 13
+#     on_value:
+#       - script.execute:
+#           id: np_write
+#           op: 2                  # EXEC only (mode change, transient)

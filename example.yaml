@@ -1,0 +1,41 @@
+# Standalone example — generic ESP32 + RS-485 transceiver -> Sugar Valley NeoPool.
+# Adjust pins to your board. For the PoolX board, see the main poolx.yaml instead.
+
+esphome:
+  name: neopool-example
+
+esp32:
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG   # keep logs off the Modbus UART
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+ota:
+  - platform: esphome
+
+# --- RS-485 Modbus hub (board-specific pins) ---
+uart:
+  - id: uart_rs485
+    tx_pin: GPIO17
+    rx_pin: GPIO18
+    baud_rate: 19200
+
+modbus:
+  id: modbus_bus
+  uart_id: uart_rs485
+  flow_control_pin: GPIO16   # transceiver DE/~RE; omit for direct TTL
+
+# --- pull in the NeoPool package ---
+packages:
+  neopool: !include neopool.yaml
+
+substitutions:
+  neopool_modbus_id: modbus_bus
+  neopool_name: "Pool"
