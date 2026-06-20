@@ -169,7 +169,6 @@ sensor:
     value_type: U_WORD
     accuracy_decimals: 2
     unit_of_measurement: "pH"
-    entity_category: diagnostic
     skip_updates: 30
     filters: [multiply: 0.01]
 
@@ -196,7 +195,6 @@ sensor:
     register_type: read
     value_type: U_WORD
     unit_of_measurement: "mV"
-    entity_category: diagnostic
     skip_updates: 30
 
   - platform: modbus_controller
@@ -222,7 +220,6 @@ sensor:
     register_type: read
     value_type: U_WORD
     unit_of_measurement: "g/h"
-    entity_category: diagnostic
     skip_updates: 30
     filters: [multiply: 0.1]
 
@@ -301,7 +298,7 @@ binary_sensor:
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
     device_id: ${neopool_device_id}
-    name: "${neopool_name} Module Active"
+    name: "${neopool_name} Chlorinator Active"
     address: 0x010D
     register_type: read
     bitmask: 0x0020           # MBMSK_HIDRO_STATUS_MODULE_ACTIVE
