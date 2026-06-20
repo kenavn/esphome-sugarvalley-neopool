@@ -35,11 +35,13 @@ substitutions:
   neopool_address: "0x01"          # NeoPool Modbus slave address
   neopool_name: "Pool"             # entity name prefix
   neopool_update_interval: "10s"   # base poll cadence
-  # Which relay of MBF_RELAY_STATE (0x010E) the demo write toggles, as a bitmask.
-  # NeoPool relay bits (typical factory assignment): 0x0001 = pH acid pump,
-  # 0x0002 = filtration, 0x0004 = lighting, 0x0008+ = aux. Default = lighting (safe).
-  # !! Do NOT set 0x0001 — that is the acid dosing pump. !!
-  neopool_aux_relay_bitmask: "0x0004"
+  # Which bit of MBF_RELAY_STATE (0x010E) is the filtration (pump) relay, for the
+  # read-only "Pump (Filtration) Active" status sensor. Relay N => bit (N-1):
+  # 0x0001 = Relay 1, 0x0002 = Relay 2, 0x0004 = Relay 3, ... Default 0x0002
+  # (Relay 2 = filtration, the factory default). Confirm against MBF_PAR_FILT_GPIO
+  # (0x0412): if it reads N, set this to 1 << (N-1). This is READ-ONLY — see
+  # WRITE_SAFETY.md for why relay *writes* are not exposed.
+  neopool_filt_relay_bitmask: "0x0002"
 
 modbus_controller:
   - id: ${neopool_id}
@@ -217,7 +219,8 @@ sensor:
     internal: true
     skip_updates: 6
 
-  # raw relay-state bitfield; used by the relay switch's RMW + flow diagnostics
+  # raw relay-state bitfield (read-only); decoded into the pump-status binary
+  # sensor below. (No relay WRITE path exists — see WRITE_SAFETY.md.)
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
     id: np_relay_state_raw
@@ -238,6 +241,16 @@ binary_sensor:
     register_type: read
     bitmask: 0x0008           # MBMSK_HIDRO_STATUS_FL1
     device_class: moving
+
+  # Pump status = the filtration relay bit of MBF_RELAY_STATE (read-only).
+  # Bit selected by ${neopool_filt_relay_bitmask} (default Relay 2 = 0x0002).
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    name: "${neopool_name} Pump (Filtration) Active"
+    address: 0x010E           # MBF_RELAY_STATE
+    register_type: read
+    bitmask: ${neopool_filt_relay_bitmask}
+    device_class: running
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
@@ -319,27 +332,19 @@ text_sensor:
     update_interval: ${neopool_update_interval}
 
 # -----------------------------------------------------------------------------
-#  WRITE — single relay, proof-of-concept for the NeoPool commit path.
+#  WRITE — commit helpers for SETPOINT writes only.
 #
-#  EXPERIMENTAL — UNVERIFIED ON HARDWARE. NeoPool relay control is a sequence:
-#    1) MBF_SET_MANUAL_CTRL (0x0289) = 1   (enable manual relay control)
-#    2) MBF_RELAY_STATE     (0x010E)  set/clear the target bit (read-modify-write)
-#    3) MBF_SET_MANUAL_CTRL (0x0289) = 0   (release manual control)
-#    4) MBF_EXEC            (0x02F5) = 1   (apply the change to RAM)
-#  Writing MBF_SAVE_TO_EEPROM (0x02F0) is intentionally NOT done here (live
-#  changes only — avoids EEPROM wear). Verify the bit/sequence on your unit.
+#  Relay control was REMOVED. It needs a manual-control bracket + a read-modify-
+#  write of the single shared MBF_RELAY_STATE word, which ESPHome's high-level
+#  modbus_controller cannot do atomically or with a correct base — in testing it
+#  stopped a live pool pump. See WRITE_SAFETY.md for the full rationale and the
+#  documented plan to add relay control correctly (low-level queue_command path).
+#
+#  The two helpers below are the commit primitives used by the np_write script:
+#    np_exec  -> MBF_EXEC (0x02F5)         apply staged write to RAM (live)
+#    np_save  -> MBF_SAVE_TO_EEPROM (0x02F0) persist (sparingly; ~1s unresponsive)
 # -----------------------------------------------------------------------------
 switch:
-  # internal write helpers (each toggle issues one Modbus write)
-  - platform: modbus_controller
-    modbus_controller_id: ${neopool_id}
-    id: np_manual_ctrl
-    register_type: holding
-    address: 0x0289           # MBF_SET_MANUAL_CTRL
-    bitmask: 0x0001
-    use_write_multiple: true
-    internal: true
-
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
     id: np_exec
@@ -358,79 +363,27 @@ switch:
     use_write_multiple: true
     internal: true
 
-  - platform: modbus_controller
-    modbus_controller_id: ${neopool_id}
-    id: np_relay_bit
-    register_type: holding
-    address: 0x010E           # MBF_RELAY_STATE (RMW of one bit)
-    bitmask: ${neopool_aux_relay_bitmask}
-    use_write_multiple: true
-    internal: true
-
-  # user-facing relay -> routes through the single serialized writer (np_write)
-  - platform: template
-    name: "${neopool_name} Aux Relay"
-    id: np_aux_relay
-    icon: mdi:electric-switch
-    optimistic: true
-    # DISABLED so a controller reset/OTA does NOT replay a relay write at boot.
-    # With any restoring mode, ESPHome calls write_state() at setup, which fires
-    # turn_off/on_action -> np_write -> a manual-control bracket + MBF_EXEC on the
-    # bus moments after boot. That bus poke can disrupt the Sugar Valley (observed:
-    # flow reads 0 -> pump stops). The relay stays controllable from HA at runtime;
-    # we simply never auto-write it at startup.
-    restore_mode: DISABLED
-    turn_on_action:
-      - script.execute:
-          id: np_write
-          op: 1                                     # OP_RELAY_ON
-    turn_off_action:
-      - script.execute:
-          id: np_write
-          op: 0                                     # OP_RELAY_OFF
-
 script:
   # ===========================================================================
-  #  np_write — THE single serialized Modbus writer for this device.
+  #  np_write — THE single serialized Modbus COMMIT for setpoint writes.
   #
   #  mode: queued => one invocation runs to completion before the next starts,
-  #  so NO two write sequences can ever interleave on the bus. EVERY user-facing
-  #  write control (the relay above; the setpoints/select in the opt-in block
-  #  below) funnels through this one script and never writes directly. This is
-  #  what closes the relay manual-control bracket against interleaved writes.
+  #  so no two commit sequences interleave on the bus. A setpoint platform writes
+  #  its own value register first (full-word write to a dedicated register), then
+  #  calls np_write to commit. SAFE: the value write never touches MBF_RELAY_STATE
+  #  or MBF_SET_MANUAL_CTRL, and an interleaved read can't lose the staged value.
+  #  (Relay control is intentionally NOT here — see WRITE_SAFETY.md.)
   #
   #  op codes:
-  #    0 = relay OFF   1 = relay ON   (MBF_SET_MANUAL_CTRL bracket, then EXEC)
-  #    2 = commit      (EXEC only      — live, lost on controller power cycle)
-  #    3 = commit+save (EXEC + SAVE    — persists; ~1s unresponsive afterwards)
-  #
-  #  Setpoint/select platforms write their own value register first, then call
-  #  np_write with op 2/3 to commit. Those value writes target a different
-  #  register and never trigger EXEC, so they can't corrupt the relay bracket.
+  #    2 = commit      (EXEC only   — live, lost on controller power cycle)
+  #    3 = commit+save (EXEC + SAVE — persists; ~1s unresponsive afterwards)
   # ===========================================================================
   - id: np_write
     mode: queued
     parameters:
       op: int
     then:
-      # --- relay ops (0/1): manual-control bracket ---
-      - if:
-          condition:
-            lambda: "return op <= 1;"
-          then:
-            - lambda: "id(np_manual_ctrl).turn_on();"     # 0x0289 = 1
-            - delay: 60ms
-            - if:
-                condition:
-                  lambda: "return op == 1;"
-                then:
-                  - lambda: "id(np_relay_bit).turn_on();"  # set relay bit
-                else:
-                  - lambda: "id(np_relay_bit).turn_off();" # clear relay bit
-            - delay: 60ms
-            - lambda: "id(np_manual_ctrl).turn_off();"    # 0x0289 = 0
-            - delay: 60ms
-      # --- EXEC: applies staged data (relay ops AND commit ops 2/3) ---
+      # --- EXEC: apply the staged setpoint value to RAM ---
       - lambda: "id(np_exec).turn_off();"               # ensure a state edge
       - delay: 30ms
       - lambda: "id(np_exec).turn_on();"                # MBF_EXEC = 1 -> apply
@@ -448,6 +401,8 @@ script:
 # =============================================================================
 #  WRITE ENDPOINTS — setpoints + filtration mode  (OPT-IN / COMMENTED OUT)
 #
+#  Setpoints are the ONLY write class this package supports (relay control was
+#  removed — see WRITE_SAFETY.md for why, and for the plan to re-add it safely).
 #  Validated and ready, but commented so nothing can write to a live pool until
 #  you opt in. Every write here funnels through the single queued `np_write`
 #  script (see above) via on_value, so no two write sequences ever interleave.

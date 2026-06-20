@@ -7,8 +7,9 @@ UVScenic, Station, Brilix, Bayrol, Hay** (and Albixon/VistaPool rebrands).
 Unlike a compiled external component, this is pure configuration: the controller
 speaks standard Modbus, which ESPHome's built-in `modbus_controller` already
 handles. You drop the package in, point it at your Modbus hub, and get all the
-sensors. See **[REGISTERS.md](REGISTERS.md)** for the complete register map and
-copy-paste recipes to add write endpoints (setpoints, modes, relays).
+sensors. See **[REGISTERS.md](REGISTERS.md)** for the complete register map, and
+**[WRITE_SAFETY.md](WRITE_SAFETY.md)** for which writes are safe and why (read it
+before adding any write endpoint).
 
 ## Status
 
@@ -16,10 +17,10 @@ copy-paste recipes to add write endpoints (setpoints, modes, relays).
 |---|---|
 | Measurements (pH, redox, chlorine, salt, temp, electrolysis, cell V, ionization) | ✅ reads |
 | Setpoint read-backs (pH hi/lo, redox, chlorine, hydrolysis) | ✅ reads |
-| Status / alarms (flow, on-target, cover, shock, acid pump, pH alarm, …) | ✅ binary sensors |
+| Status / alarms (flow, **pump/filtration**, on-target, cover, shock, acid pump, pH alarm, …) | ✅ binary sensors |
 | Filtration mode | ✅ decoded text |
-| **One relay** (manual-control + EXEC commit) | ⚠️ experimental, verify on hardware |
-| Setpoint **writes** (pH hi/lo, redox, chlorine, electrolysis) + filtration-mode select | 🔌 wired but **commented out** — uncomment to enable (validated) |
+| Relay control | ❌ removed — unsafe via ESPHome's high-level API ([WRITE_SAFETY.md](WRITE_SAFETY.md)) |
+| Setpoint **writes** (pH hi/lo, redox, chlorine, electrolysis) + filtration-mode select | 🔌 wired but **commented out** — uncomment to enable (validated; the only write class) |
 | Boost write | 📋 documented (REGISTERS.md §4.3) |
 
 ## Requirements
@@ -71,15 +72,15 @@ packages:
 | `neopool_address` | `0x01` | NeoPool Modbus slave address |
 | `neopool_name` | `Pool` | entity name prefix |
 | `neopool_update_interval` | `10s` | base poll cadence |
-| `neopool_aux_relay_bitmask` | `0x0004` | relay toggled by the demo switch (0x0004 = lighting). **Never 0x0001 — that's the acid pump.** |
+| `neopool_filt_relay_bitmask` | `0x0002` | which `MBF_RELAY_STATE` bit drives the **read-only** "Pump (Filtration) Active" sensor (Relay 2 = 0x0002 by default; confirm vs `MBF_PAR_FILT_GPIO` 0x0412) |
 
 ## Entities provided
 
 Sensors: pH, Redox, Chlorine, Salt/Conductivity, Water Temperature, Ionization
 Level, Electrolysis Production, Cell Voltage, plus diagnostic setpoint read-backs.
-Binary sensors: Cell Flow (FL1), On Target, Low, Cover, Module Active, Redox
-Control, Shock Mode, Acid Pump, pH Alarm. Text: Filtration Mode. Switch: Aux Relay
-(experimental).
+Binary sensors: Cell Flow (FL1), **Pump (Filtration) Active**, On Target, Low,
+Cover, Module Active, Redox Control, Shock Mode, Acid Pump, pH Alarm. Text:
+Filtration Mode. (No relay switch — relay control removed; see WRITE_SAFETY.md.)
 
 ## Adding write endpoints
 
@@ -95,6 +96,10 @@ has the full procedure and copy-paste recipes.
 
 These writes drive real chemical dosing and pumps. Keep `min`/`max` clamps, prefer
 live `MBF_EXEC` over EEPROM saves, and never write factory `*_NOM` registers.
+**Relay control is deliberately not exposed** — a bitmask read-modify-write of the
+shared `MBF_RELAY_STATE` word under ESPHome's high-level API stopped a live pump in
+testing. **[WRITE_SAFETY.md](WRITE_SAFETY.md)** has the full analysis, the holistic
+safe/unsafe classification, and the low-level plan to add relay control correctly.
 
 ## Credits & sources
 
