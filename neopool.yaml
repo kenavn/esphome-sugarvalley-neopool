@@ -35,6 +35,10 @@ substitutions:
   neopool_address: "0x01"          # NeoPool Modbus slave address
   neopool_name: "Pool"             # entity name prefix
   neopool_update_interval: "10s"   # base poll cadence
+  # Optional: assign every entity to a Home Assistant sub-device. Leave empty to
+  # keep them on the node's main device; set to an `esphome: devices:` id in your
+  # config to group all NeoPool entities under one device (e.g. "Sugar Valley").
+  neopool_device_id: ""
   # Which bit of MBF_RELAY_STATE (0x010E) is the filtration (pump) relay, for the
   # read-only "Pump (Filtration) Active" status sensor. Relay N => bit (N-1):
   # 0x0001 = Relay 1, 0x0002 = Relay 2, 0x0004 = Relay 3, ... Default 0x0002
@@ -57,6 +61,7 @@ modbus_controller:
 sensor:
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_ph
     name: "${neopool_name} pH"
     address: 0x0102            # MBF_MEASURE_PH
@@ -69,6 +74,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_redox
     name: "${neopool_name} Redox"
     address: 0x0103            # MBF_MEASURE_RX
@@ -79,6 +85,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_chlorine
     name: "${neopool_name} Chlorine"
     address: 0x0104            # MBF_MEASURE_CL (1/100 ppm)
@@ -91,6 +98,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_conductivity
     name: "${neopool_name} Conductivity"
     address: 0x0105            # MBF_MEASURE_CONDUCTIVITY (%)
@@ -101,6 +109,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_temperature
     name: "${neopool_name} Water Temperature"
     address: 0x0106            # MBF_MEASURE_TEMPERATURE (1/10 C)
@@ -115,6 +124,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_ion_current
     name: "${neopool_name} Ionization Level"
     address: 0x0100            # MBF_ION_CURRENT
@@ -124,6 +134,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_hidro_current
     name: "${neopool_name} Electrolysis Production"
     address: 0x0101            # MBF_HIDRO_CURRENT (g/h on g/h-mode units, /10)
@@ -135,6 +146,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_hidro_voltage
     name: "${neopool_name} Cell Voltage"
     address: 0x0111            # MBF_HIDRO_VOLTAGE (tenths of a volt)
@@ -149,6 +161,7 @@ sensor:
   # --- setpoint read-backs (PAR registers, still read via FC4 as verified) ---
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_ph_setpoint_high
     name: "${neopool_name} pH Setpoint High"
     address: 0x0504            # MBF_PAR_PH1
@@ -162,6 +175,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_ph_setpoint_low
     name: "${neopool_name} pH Setpoint Low"
     address: 0x0505            # MBF_PAR_PH2
@@ -175,6 +189,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_redox_setpoint
     name: "${neopool_name} Redox Setpoint"
     address: 0x0508            # MBF_PAR_RX1
@@ -186,6 +201,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_chlorine_setpoint
     name: "${neopool_name} Chlorine Setpoint"
     address: 0x050A            # MBF_PAR_CL1 (1/100 ppm)
@@ -199,6 +215,7 @@ sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_hidro_setpoint
     name: "${neopool_name} Electrolysis Setpoint"
     address: 0x0502            # MBF_PAR_HIDRO (g/h on g/h-mode units, /10)
@@ -212,6 +229,7 @@ sensor:
   # raw filtration-mode code; decoded to text below
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_filt_mode
     address: 0x0411            # MBF_PAR_FILT_MODE
     register_type: read
@@ -223,6 +241,7 @@ sensor:
   # sensor below. (No relay WRITE path exists — see WRITE_SAFETY.md.)
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_relay_state_raw
     address: 0x010E            # MBF_RELAY_STATE
     register_type: read
@@ -236,6 +255,7 @@ sensor:
 binary_sensor:
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Cell Flow (FL1)"
     address: 0x010D
     register_type: read
@@ -246,6 +266,7 @@ binary_sensor:
   # Bit selected by ${neopool_filt_relay_bitmask} (default Relay 2 = 0x0002).
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Pump (Filtration) Active"
     address: 0x010E           # MBF_RELAY_STATE
     register_type: read
@@ -254,6 +275,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Electrolysis On Target"
     address: 0x010D
     register_type: read
@@ -261,6 +283,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Electrolysis Low (cannot reach setpoint)"
     address: 0x010D
     register_type: read
@@ -269,6 +292,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Cover Closed"
     address: 0x010D
     register_type: read
@@ -276,6 +300,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Module Active"
     address: 0x010D
     register_type: read
@@ -284,6 +309,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Redox Control Enabled"
     address: 0x010D
     register_type: read
@@ -292,6 +318,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Shock Mode"
     address: 0x010D
     register_type: read
@@ -299,6 +326,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} Acid Pump Active"
     address: 0x0107
     register_type: read
@@ -306,6 +334,7 @@ binary_sensor:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     name: "${neopool_name} pH Alarm"
     address: 0x0107
     register_type: read
@@ -319,6 +348,7 @@ text_sensor:
   - platform: template
     name: "${neopool_name} Filtration Mode"
     id: np_filt_mode_text
+    device_id: ${neopool_device_id}
     lambda: |-
       switch ((int) id(np_filt_mode).state) {
         case 0:  return {"Manual"};
@@ -347,6 +377,7 @@ text_sensor:
 switch:
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_exec
     register_type: holding
     address: 0x02F5           # MBF_EXEC (apply staged write to RAM, live)
@@ -356,6 +387,7 @@ switch:
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
     id: np_save               # MBF_SAVE_TO_EEPROM — persist. ~1s unresponsive.
     register_type: holding
     address: 0x02F0
@@ -431,6 +463,7 @@ script:
 # number:
 #   - platform: modbus_controller
 #     modbus_controller_id: ${neopool_id}
+#     device_id: ${neopool_device_id}
 #     name: "${neopool_name} pH Setpoint High"
 #     address: 0x0504            # MBF_PAR_PH1 (must stay > PH2)
 #     register_type: holding
@@ -448,6 +481,7 @@ script:
 #
 #   - platform: modbus_controller
 #     modbus_controller_id: ${neopool_id}
+#     device_id: ${neopool_device_id}
 #     name: "${neopool_name} pH Setpoint Low"
 #     address: 0x0505            # MBF_PAR_PH2 (must stay < PH1)
 #     register_type: holding
@@ -465,6 +499,7 @@ script:
 #
 #   - platform: modbus_controller
 #     modbus_controller_id: ${neopool_id}
+#     device_id: ${neopool_device_id}
 #     name: "${neopool_name} Redox Setpoint"
 #     address: 0x0508            # MBF_PAR_RX1 (range 0..1000 mV)
 #     register_type: holding
@@ -480,6 +515,7 @@ script:
 #
 #   - platform: modbus_controller
 #     modbus_controller_id: ${neopool_id}
+#     device_id: ${neopool_device_id}
 #     name: "${neopool_name} Chlorine Setpoint"
 #     address: 0x050A            # MBF_PAR_CL1 (range 0..1000 -> 0..10 ppm)
 #     register_type: holding
@@ -496,6 +532,7 @@ script:
 #
 #   - platform: modbus_controller
 #     modbus_controller_id: ${neopool_id}
+#     device_id: ${neopool_device_id}
 #     name: "${neopool_name} Electrolysis Setpoint"
 #     address: 0x0502            # MBF_PAR_HIDRO (g/h mode here, /10)
 #     register_type: holding
@@ -513,6 +550,7 @@ script:
 # select:
 #   - platform: modbus_controller
 #     modbus_controller_id: ${neopool_id}
+#     device_id: ${neopool_device_id}
 #     name: "${neopool_name} Filtration Mode"
 #     address: 0x0411            # MBF_PAR_FILT_MODE (no register_type on select)
 #     use_write_multiple: true
