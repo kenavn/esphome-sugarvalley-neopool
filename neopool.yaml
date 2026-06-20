@@ -373,6 +373,13 @@ switch:
     id: np_aux_relay
     icon: mdi:electric-switch
     optimistic: true
+    # DISABLED so a controller reset/OTA does NOT replay a relay write at boot.
+    # With any restoring mode, ESPHome calls write_state() at setup, which fires
+    # turn_off/on_action -> np_write -> a manual-control bracket + MBF_EXEC on the
+    # bus moments after boot. That bus poke can disrupt the Sugar Valley (observed:
+    # flow reads 0 -> pump stops). The relay stays controllable from HA at runtime;
+    # we simply never auto-write it at startup.
+    restore_mode: DISABLED
     turn_on_action:
       - script.execute:
           id: np_write
