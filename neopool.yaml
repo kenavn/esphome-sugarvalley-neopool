@@ -182,7 +182,6 @@ sensor:
     value_type: U_WORD
     accuracy_decimals: 2
     unit_of_measurement: "pH"
-    entity_category: diagnostic
     skip_updates: 30
     filters: [multiply: 0.01]
 
@@ -207,7 +206,6 @@ sensor:
     value_type: U_WORD
     accuracy_decimals: 2
     unit_of_measurement: "ppm"
-    entity_category: diagnostic
     skip_updates: 30
     filters: [multiply: 0.01]
 
@@ -222,6 +220,86 @@ sensor:
     unit_of_measurement: "g/h"
     skip_updates: 30
     filters: [multiply: 0.1]
+
+  # ---------------------------------------------------------------------------
+  #  DIAGNOSTICS — static device configuration (entity_category: diagnostic).
+  #  Identity, cell capacity, and the per-install relay map. Rarely changes, so
+  #  polled slowly. This relay map is what pinpointed the pump-stop root cause.
+  # ---------------------------------------------------------------------------
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Cell Capacity"
+    address: 0x0306            # MBF_PAR_HIDRO_NOM (max production; DO NOT WRITE)
+    register_type: read
+    value_type: U_WORD
+    unit_of_measurement: "g/h"
+    entity_category: diagnostic
+    skip_updates: 60
+    filters: [multiply: 0.1]
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Machine Code"
+    address: 0x0600            # MBF_PAR_UICFG_MACHINE (model id)
+    register_type: read
+    value_type: U_WORD
+    entity_category: diagnostic
+    skip_updates: 60
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Filtration Relay #"
+    address: 0x0412            # MBF_PAR_FILT_GPIO (0 = inactive)
+    register_type: read
+    value_type: U_WORD
+    entity_category: diagnostic
+    skip_updates: 60
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Lighting Relay #"
+    address: 0x0410            # MBF_PAR_LIGHTING_GPIO
+    register_type: read
+    value_type: U_WORD
+    entity_category: diagnostic
+    skip_updates: 60
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Acid Relay #"
+    address: 0x040A            # MBF_PAR_PH_ACID_RELAY_GPIO
+    register_type: read
+    value_type: U_WORD
+    entity_category: diagnostic
+    skip_updates: 60
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Redox Relay #"
+    address: 0x040C            # MBF_PAR_RX_RELAY_GPIO
+    register_type: read
+    value_type: U_WORD
+    entity_category: diagnostic
+    skip_updates: 60
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Chlorine Relay #"
+    address: 0x040D            # MBF_PAR_CL_RELAY_GPIO
+    register_type: read
+    value_type: U_WORD
+    entity_category: diagnostic
+    skip_updates: 60
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    device_id: ${neopool_device_id}
+    name: "${neopool_name} Heating Relay #"
+    address: 0x0415            # MBF_PAR_HEATING_GPIO
+    register_type: read
+    value_type: U_WORD
+    entity_category: diagnostic
+    skip_updates: 60
 
   # raw filtration-mode code; decoded to text below
   - platform: modbus_controller
@@ -302,7 +380,6 @@ binary_sensor:
     address: 0x010D
     register_type: read
     bitmask: 0x0020           # MBMSK_HIDRO_STATUS_MODULE_ACTIVE
-    entity_category: diagnostic
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}
@@ -311,7 +388,6 @@ binary_sensor:
     address: 0x010D
     register_type: read
     bitmask: 0x0080           # MBMSK_HIDRO_STATUS_REDOX_ENABLED
-    entity_category: diagnostic
 
   - platform: modbus_controller
     modbus_controller_id: ${neopool_id}

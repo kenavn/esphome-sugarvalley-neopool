@@ -1,0 +1,166 @@
+# =============================================================================
+#  esphome-sugarvalley-neopool — SETPOINT WRITE controls  (OPT-IN add-on)
+#
+#  Include this ALONGSIDE neopool.yaml to add safe, deliberate setpoint writing
+#  (pH / Redox / Electrolysis). Without it, the core package is read-only.
+#  See WRITE_SAFETY.md for why writes are gated and why these are safe (dedicated
+#  registers, full-word FC16 writes, no relay word, no manual-control bracket).
+#
+#    packages:
+#      neopool:           github://kenavn/esphome-sugarvalley-neopool/neopool.yaml@vX
+#      neopool_setpoints: github://kenavn/esphome-sugarvalley-neopool/neopool-setpoints.yaml@vX
+#
+#  UX: each "... Target" input MIRRORS its current setpoint and does NOTHING when
+#  edited (it just stages a pending value). "Apply Setpoints" is the ONLY thing
+#  that writes — it commits each EDITED target with EXEC + SAVE (persists). Add a
+#  dashboard `confirmation:` on that button for an "are you sure?" prompt.
+#
+#  Depends on neopool.yaml for: substitutions neopool_id / neopool_name /
+#  neopool_device_id, the read sensors np_ph_setpoint_high / np_redox_setpoint /
+#  np_hidro_setpoint, and the np_write commit script.
+# =============================================================================
+
+substitutions:
+  # Clamp ranges — OVERRIDE per pool. Especially set the electrolysis max to your
+  # cell's nominal capacity (the "Cell Capacity" diagnostic / MBF_PAR_HIDRO_NOM).
+  neopool_ph_min: "6.5"
+  neopool_ph_max: "8.0"
+  neopool_redox_min: "300"
+  neopool_redox_max: "850"
+  neopool_hidro_max: "100"      # g/h ceiling — set to YOUR cell capacity
+
+globals:
+  # "dirty" = user edited the target but hasn't pressed Apply; freezes the mirror.
+  - id: g_ph_dirty
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_redox_dirty
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_hidro_dirty
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+# Mirror each current setpoint into its Target while the user isn't editing, and
+# refresh the reads faster so the display confirms quickly after Apply.
+sensor:
+  - id: !extend np_ph_setpoint_high
+    skip_updates: 1
+    on_value:
+      - lambda: 'if (!id(g_ph_dirty)) id(ph_target).publish_state(x);'
+  - id: !extend np_redox_setpoint
+    skip_updates: 1
+    on_value:
+      - lambda: 'if (!id(g_redox_dirty)) id(redox_target).publish_state(x);'
+  - id: !extend np_hidro_setpoint
+    skip_updates: 1
+    on_value:
+      - lambda: 'if (!id(g_hidro_dirty)) id(hidro_target).publish_state(x);'
+
+number:
+  - platform: template
+    name: "${neopool_name} pH Target"
+    device_id: ${neopool_device_id}
+    id: ph_target
+    unit_of_measurement: "pH"
+    min_value: ${neopool_ph_min}
+    max_value: ${neopool_ph_max}
+    step: 0.05
+    mode: box
+    optimistic: true
+    restore_value: false
+    set_action:
+      - lambda: 'id(g_ph_dirty) = true;'    # stage only — no write
+
+  - platform: template
+    name: "${neopool_name} Redox Target"
+    device_id: ${neopool_device_id}
+    id: redox_target
+    unit_of_measurement: "mV"
+    min_value: ${neopool_redox_min}
+    max_value: ${neopool_redox_max}
+    step: 5
+    mode: box
+    optimistic: true
+    restore_value: false
+    set_action:
+      - lambda: 'id(g_redox_dirty) = true;'
+
+  - platform: template
+    name: "${neopool_name} Electrolysis Target"
+    device_id: ${neopool_device_id}
+    id: hidro_target
+    unit_of_measurement: "g/h"
+    min_value: 0
+    max_value: ${neopool_hidro_max}
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: false
+    set_action:
+      - lambda: 'id(g_hidro_dirty) = true;'
+
+button:
+  # The ONLY thing that writes setpoints. Writes each EDITED target (FC16 — the
+  # device rejects FC6) + EXEC + SAVE (persists), echoes it for instant display,
+  # then re-reads to confirm. Untouched targets are left alone.
+  - platform: template
+    name: "${neopool_name} Apply Setpoints"
+    device_id: ${neopool_device_id}
+    icon: mdi:content-save-check
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(g_ph_dirty);'
+          then:
+            - lambda: |-
+                uint16_t raw = (uint16_t) lroundf(id(ph_target).state * 100.0f);  // 7.40 -> 740
+                std::vector<uint16_t> vals = { raw };
+                id(${neopool_id})->queue_command(
+                  esphome::modbus_controller::ModbusCommandItem::create_write_multiple_command(
+                    id(${neopool_id}), 0x0504, 1, vals));                          // MBF_PAR_PH1
+            - delay: 250ms
+            - script.execute:
+                id: np_write
+                op: 3
+            - lambda: 'id(np_ph_setpoint_high).publish_state(id(ph_target).state);'
+      - if:
+          condition:
+            lambda: 'return id(g_redox_dirty);'
+          then:
+            - lambda: |-
+                uint16_t raw = (uint16_t) lroundf(id(redox_target).state);        // mV
+                std::vector<uint16_t> vals = { raw };
+                id(${neopool_id})->queue_command(
+                  esphome::modbus_controller::ModbusCommandItem::create_write_multiple_command(
+                    id(${neopool_id}), 0x0508, 1, vals));                          // MBF_PAR_RX1
+            - delay: 250ms
+            - script.execute:
+                id: np_write
+                op: 3
+            - lambda: 'id(np_redox_setpoint).publish_state(id(redox_target).state);'
+      - if:
+          condition:
+            lambda: 'return id(g_hidro_dirty);'
+          then:
+            - lambda: |-
+                uint16_t raw = (uint16_t) lroundf(id(hidro_target).state * 10.0f); // 12.0 g/h -> 120
+                std::vector<uint16_t> vals = { raw };
+                id(${neopool_id})->queue_command(
+                  esphome::modbus_controller::ModbusCommandItem::create_write_multiple_command(
+                    id(${neopool_id}), 0x0502, 1, vals));                          // MBF_PAR_HIDRO
+            - delay: 250ms
+            - script.execute:
+                id: np_write
+                op: 3
+            - lambda: 'id(np_hidro_setpoint).publish_state(id(hidro_target).state);'
+      - lambda: |-
+          id(g_ph_dirty) = false;
+          id(g_redox_dirty) = false;
+          id(g_hidro_dirty) = false;
+      - delay: 300ms
+      # quick fetch — re-read setpoints from the controller so the display confirms
+      - lambda: 'id(${neopool_id})->update();'
