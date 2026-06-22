@@ -19,7 +19,7 @@ before adding any write endpoint).
 | Setpoint read-backs (pH hi/lo, redox, chlorine, hydrolysis) | ✅ reads |
 | Status / alarms (flow, **pump/filtration**, on-target, cover, shock, acid pump, pH alarm, …) | ✅ binary sensors |
 | Filtration mode | ✅ decoded text |
-| Relay control | ❌ removed — unsafe via ESPHome's high-level API ([WRITE_SAFETY.md](WRITE_SAFETY.md)) |
+| Filtration on/off | ✅ opt-in add-on (`neopool-filtration.yaml`) — writes the dedicated filtration register |
 | Setpoint **writes** (pH hi/lo, redox, chlorine, electrolysis) + filtration-mode select | 🔌 wired but **commented out** — uncomment to enable (validated; the only write class) |
 | Boost write | 📋 documented (REGISTERS.md §4.3) |
 
@@ -80,7 +80,7 @@ Sensors: pH, Redox, Chlorine, Salt/Conductivity, Water Temperature, Ionization
 Level, Electrolysis Production, Cell Voltage, plus diagnostic setpoint read-backs.
 Binary sensors: Cell Flow (FL1), **Pump (Filtration) Active**, On Target, Low,
 Cover, Module Active, Redox Control, Shock Mode, Acid Pump, pH Alarm. Text:
-Filtration Mode. (No relay switch — relay control removed; see WRITE_SAFETY.md.)
+Filtration Mode. (Filtration on/off control is the opt-in `neopool-filtration.yaml` add-on.)
 
 ## Adding write endpoints
 
@@ -96,10 +96,14 @@ has the full procedure and copy-paste recipes.
 
 These writes drive real chemical dosing and pumps. Keep `min`/`max` clamps, prefer
 live `MBF_EXEC` over EEPROM saves, and never write factory `*_NOM` registers.
-**Relay control is deliberately not exposed** — a bitmask read-modify-write of the
-shared `MBF_RELAY_STATE` word under ESPHome's high-level API stopped a live pump in
-testing. **[WRITE_SAFETY.md](WRITE_SAFETY.md)** has the full analysis, the holistic
-safe/unsafe classification, and the low-level plan to add relay control correctly.
+**Controlling a relay** goes through the function's dedicated parameter register
+(e.g. filtration on/off via `MBF_PAR_FILT_MANUAL_STATE`), not the shared
+`MBF_RELAY_STATE` word — and it only takes effect when that function is **assigned to
+a relay** in the controller's relay configuration (the `MBF_PAR_*_GPIO` map, e.g.
+`MBF_PAR_FILT_GPIO`). A function that isn't mapped to a physical relay there can't be
+driven from its control register, so set the relay assignment up on the controller
+first. **[WRITE_SAFETY.md](WRITE_SAFETY.md)** has the per-register safe/unsafe write
+classification.
 
 ## Credits & sources
 
