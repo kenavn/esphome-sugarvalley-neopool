@@ -1,0 +1,114 @@
+# =============================================================================
+#  esphome-sugarvalley-neopool — FILTRATION on/off control  (OPT-IN add-on)
+#
+#  Include this ALONGSIDE neopool.yaml to add a switch that starts/stops the
+#  filtration pump. Without it, the core package is read-only.
+#
+#    packages:
+#      neopool:            github://kenavn/esphome-sugarvalley-neopool/neopool.yaml@vX
+#      neopool_filtration: github://kenavn/esphome-sugarvalley-neopool/neopool-filtration.yaml@vX
+#
+#  WHY THIS IS SAFE (see WRITE_SAFETY.md §5):
+#  The switch writes the DEDICATED MBF_PAR_FILT_MANUAL_STATE register (0x0413) as
+#  a full word, then commits with MBF_EXEC. This is the SAME mechanically-clean
+#  write class as the setpoints — it does NOT use MBF_SET_MANUAL_CTRL and does NOT
+#  touch the shared MBF_RELAY_STATE bitmask word, so it CANNOT trigger the
+#  relay-bitmask stopped-pump failure documented in §4. It is the same register
+#  the Tasmota reference driver's NPFiltration command writes.
+#
+#  IMPORTANT — only effective in MANUAL filtration mode:
+#  MBF_PAR_FILTRATION_STATE (0x0421) follows MBF_PAR_FILT_MANUAL_STATE only while
+#  MBF_PAR_FILT_MODE (0x0411) = Manual (0). In Auto/Heating/Smart/Intelligent the
+#  schedule governs the pump and this switch has no effect until you set Manual.
+#
+#  COMMIT CHOICE: op 2 = EXEC-only (live, no EEPROM wear; a controller power-cycle
+#  reverts to the controller's own stored state). Filtration on/off is transient,
+#  so we deliberately do NOT persist it (op 3) — that would wear the EEPROM.
+#
+#  Depends on neopool.yaml for: substitutions neopool_id / neopool_name /
+#  neopool_device_id, and the queued `np_write` commit script.
+#
+#  Optional host hook `neopool_filtration_inhibit`: a C++ bool expression that,
+#  when true, makes the switch REFUSE to start filtration (the host is holding the
+#  pump off — e.g. a tripped safety latch). Defaults to never inhibiting. STOP is
+#  never inhibited. Override via the include, e.g.:
+#    neopool_filtration: !include
+#      file: .../neopool-filtration.yaml
+#      vars: { neopool_filtration_inhibit: "id(my_latch).state" }
+# =============================================================================
+
+substitutions:
+  neopool_filtration_inhibit: "false"
+
+# Canonical filtration state, read back from the controller. It tracks the pump
+# no matter WHO changed it — this switch, the NeoPool front panel, or a schedule.
+#
+# NOTE: this is a NUMERIC sensor on purpose. A modbus binary_sensor only fires
+# on_state on a CHANGE, so the switch would get exactly one sync publish; if that
+# lands before the switch is ready (e.g. a forced early read at boot) it's lost,
+# and since 0x0421 then never "changes" the switch stays stuck. A numeric sensor
+# publishes EVERY poll, so on_value re-syncs the switch each cycle and self-heals.
+# internal: not shown in HA — the switch below is the HA-facing entity, and the
+# core package's "Pump (Filtration) Active" (0x010E) is the read-only indicator.
+sensor:
+  - platform: modbus_controller
+    modbus_controller_id: ${neopool_id}
+    id: np_filtration_state
+    address: 0x0421            # MBF_PAR_FILTRATION_STATE (0 off / 1 on)
+    register_type: read
+    value_type: U_WORD
+    internal: true
+    on_value:
+      # Mirror reality into the control switch every poll. publish_state() only
+      # updates the REPORTED state — it does NOT fire turn_on/off — so no loop.
+      - lambda: 'id(np_filtration).publish_state(x >= 0.5f);'
+
+switch:
+  # Filtration pump on/off via MBF_PAR_FILT_MANUAL_STATE (0x0413) + EXEC.
+  #   * restore_mode DISABLED -> the switch NEVER writes on boot/OTA, so a reset
+  #     or firmware update can never stop (or start) the pump on its own. Its
+  #     displayed state comes only from the read-back sensor above.
+  #   * optimistic -> the UI flips immediately on press; the read-back then
+  #     confirms (and corrects, within one poll, if the controller didn't follow).
+  - platform: template
+    name: "${neopool_name} Filtration"
+    id: np_filtration
+    device_id: ${neopool_device_id}
+    icon: mdi:pump
+    optimistic: true
+    restore_mode: DISABLED
+    turn_on_action:
+      # Refuse the START when the host inhibit is asserted (e.g. a tripped latch).
+      - if:
+          condition:
+            lambda: 'return !(${neopool_filtration_inhibit});'
+          then:
+            - lambda: |-
+                std::vector<uint16_t> vals = { 1 };   // MBF_PAR_FILT_MANUAL_STATE = ON
+                id(${neopool_id})->queue_command(
+                  esphome::modbus_controller::ModbusCommandItem::create_write_multiple_command(
+                    id(${neopool_id}), 0x0413, 1, vals));
+            - delay: 250ms
+            - script.execute:
+                id: np_write
+                op: 2                # EXEC only — apply live, no EEPROM write
+            - delay: 300ms
+            - lambda: 'id(${neopool_id})->update();'   # re-read so state confirms fast
+          else:
+            - logger.log:
+                level: WARN
+                format: "Filtration start refused — inhibited by host"
+            - delay: 100ms
+            - lambda: 'id(np_filtration).publish_state(false);'   # bounce back to OFF
+    turn_off_action:
+      - lambda: |-
+          std::vector<uint16_t> vals = { 0 };   // MBF_PAR_FILT_MANUAL_STATE = OFF
+          id(${neopool_id})->queue_command(
+            esphome::modbus_controller::ModbusCommandItem::create_write_multiple_command(
+              id(${neopool_id}), 0x0413, 1, vals));
+      - delay: 250ms
+      - script.execute:
+          id: np_write
+          op: 2
+      - delay: 300ms
+      - lambda: 'id(${neopool_id})->update();'
